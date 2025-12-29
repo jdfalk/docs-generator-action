@@ -1,0 +1,491 @@
+name: Documentation Generator
+description: Generate API and workflow documentation from source code and GitHub Actions workflows
+author: jdfalk
+
+inputs:
+  source-dirs:
+    description: >
+      Comma-separated list of source directories containing Python modules to document.
+      Each directory will be scanned recursively for .py files.
+    required: false
+    default: ".github/workflows/scripts"
+
+  workflows-dir:
+    description: >
+      Directory containing GitHub Actions workflow YAML files (.yml, .yaml).
+      Used to generate workflow reference documentation.
+    required: false
+    default: ".github/workflows"
+
+  output-dir:
+    description: >
+      Root directory where documentation will be generated.
+      Creates subdirectories for API docs, workflows, and search index.
+    required: true
+
+  doc-version:
+    description: >
+      Documentation version string (e.g., "1.0.0", "latest", "stable-v2").
+      If not provided, derives from environment or defaults to "latest".
+    required: false
+    default: ""
+
+  generate-api:
+    description: >
+      Whether to generate API documentation from Python docstrings.
+    required: false
+    default: "true"
+
+  generate-workflows:
+    description: >
+      Whether to generate workflow reference documentation.
+    required: false
+    default: "true"
+
+  generate-search-index:
+    description: >
+      Whether to generate a search index JSON file for documentation site integration.
+    required: false
+    default: "true"
+
+outputs:
+  build-status:
+    description: >
+      Build status result. One of: success, partial, failed.
+    value: ${{ steps.generate.outputs.build-status }}
+
+  generated-files:
+    description: >
+      JSON array of paths to generated documentation files.
+    value: ${{ steps.generate.outputs.generated-files }}
+
+  api-docs-count:
+    description: >
+      Number of API documentation files generated.
+    value: ${{ steps.generate.outputs.api-docs-count }}
+
+  doc-version:
+    description: >
+      The resolved documentation version used for this build.
+    value: ${{ steps.generate.outputs.doc-version }}
+
+  output-dir:
+    description: >
+      The absolute path to the documentation output directory.
+    value: ${{ steps.generate.outputs.output-dir }}
+
+  search-index-path:
+    description: >
+      Path to the generated search index JSON file (if enabled).
+    value: ${{ steps.generate.outputs.search-index-path }}
+
+runs:
+  using: composite
+  steps:
+    - id: generate
+      shell: python
+      env:
+        SOURCE_DIRS: ${{ inputs.source-dirs }}
+        WORKFLOWS_DIR: ${{ inputs.workflows-dir }}
+        OUTPUT_DIR: ${{ inputs.output-dir }}
+        DOC_VERSION: ${{ inputs.doc-version }}
+        GENERATE_API: ${{ inputs.generate-api }}
+        GENERATE_WORKFLOWS: ${{ inputs.generate-workflows }}
+        GENERATE_SEARCH_INDEX: ${{ inputs.generate-search-index }}
+        GITHUB_REF_NAME: ${{ github.ref_name }}
+      run: |
+        import argparse
+        import ast
+        import json
+        import os
+        import re
+        import sys
+        from collections.abc import Iterable
+        from dataclasses import dataclass
+        from pathlib import Path
+        from typing import Any
+
+        try:
+            import yaml
+        except ImportError:
+            import subprocess
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "pyyaml"])
+            import yaml
+
+        # ===== Data Structures ===== #
+
+        @dataclass
+        class DocFunction:
+            """Documentation for a function."""
+            name: str
+            signature: str
+            docstring: str
+
+        @dataclass
+        class DocClass:
+            """Documentation for a class."""
+            name: str
+            docstring: str
+            methods: list
+
+        @dataclass
+        class DocModule:
+            """Documentation for a Python module."""
+            name: str
+            path: Path
+            version: str
+            docstring: str
+            functions: list
+            classes: list
+
+        @dataclass
+        class WorkflowDoc:
+            """Documentation for a GitHub Actions workflow."""
+            name: str
+            file: Path
+            on: list
+            description: str
+            jobs: dict
+
+        # ===== Python Documentation Helpers ===== #
+
+        def _format_args(args: ast.arguments) -> str:
+            """Format function arguments into a signature string."""
+            parts = []
+            defaults = list(args.defaults)
+            kw_defaults = list(args.kw_defaults)
+
+            def _format(arg: ast.arg, default: ast.AST | None) -> str:
+                name = arg.arg
+                annotation = ast.unparse(arg.annotation) if arg.annotation else None
+                default_str = ast.unparse(default) if default else None
+                result = name
+                if annotation:
+                    result += f": {annotation}"
+                if default_str:
+                    result += f" = {default_str}"
+                return result
+
+            positional = args.posonlyargs + args.args
+            total_defaults = len(defaults)
+            default_start = len(positional) - total_defaults
+            for index, arg in enumerate(positional):
+                default = defaults[index - default_start] if index >= default_start else None
+                parts.append(_format(arg, default))
+
+            if args.vararg:
+                parts.append(f"*{args.vararg.arg}")
+
+            if args.kwonlyargs:
+                if not args.vararg:
+                    parts.append("*")
+                for kw_arg, default in zip(args.kwonlyargs, kw_defaults):
+                    parts.append(_format(kw_arg, default))
+
+            if args.kwarg:
+                parts.append(f"**{args.kwarg.arg}")
+
+            return ", ".join(parts)
+
+        def _extract_version(path: Path) -> str:
+            """Extract module version from header comment."""
+            try:
+                for line in path.read_text(encoding="utf-8").splitlines()[:5]:
+                    match = re.search(r"#\s*version:\s*([0-9]+\.[0-9]+\.[0-9]+)", line, re.IGNORECASE)
+                    if match:
+                        return match.group(1)
+            except Exception:
+                pass
+            return "0.0.0"
+
+        def parse_python_module(path: Path) -> DocModule | None:
+            """Parse a Python file into documentation structures."""
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+                module_doc = ast.get_docstring(tree) or ""
+                module_name = path.stem
+
+                functions = []
+                classes = []
+
+                for node in tree.body:
+                    if isinstance(node, ast.FunctionDef):
+                        signature = f"{node.name}({_format_args(node.args)})"
+                        docstring = ast.get_docstring(node) or ""
+                        functions.append(DocFunction(node.name, signature, docstring))
+                    elif isinstance(node, ast.ClassDef):
+                        methods = []
+                        docstring = ast.get_docstring(node) or ""
+                        for item in node.body:
+                            if isinstance(item, ast.FunctionDef):
+                                signature = f"{item.name}({_format_args(item.args)})"
+                                method_doc = ast.get_docstring(item) or ""
+                                methods.append(DocFunction(item.name, signature, method_doc))
+                        classes.append(DocClass(node.name, docstring, methods))
+
+                return DocModule(
+                    name=module_name,
+                    path=path,
+                    version=_extract_version(path),
+                    docstring=module_doc,
+                    functions=functions,
+                    classes=classes,
+                )
+            except Exception as e:
+                print(f"::warning::Failed to parse {path}: {e}")
+                return None
+
+        def discover_python_modules(sources: Iterable[Path]) -> list:
+            """Discover Python modules under the given source directories."""
+            modules = []
+            for source in sources:
+                if not source.exists():
+                    print(f"::warning::Source directory does not exist: {source}")
+                    continue
+                for path in source.rglob("*.py"):
+                    if path.name.startswith("__"):
+                        continue
+                    module = parse_python_module(path)
+                    if module:
+                        modules.append(module)
+            modules.sort(key=lambda module: module.name)
+            return modules
+
+        def generate_api_docs(source_dirs: list, output_dir: Path) -> list:
+            """Generate Markdown documentation for Python helpers."""
+            output_dir.mkdir(parents=True, exist_ok=True)
+            sources = [Path(source).resolve() for source in source_dirs]
+            modules = discover_python_modules(sources)
+            written_files = []
+
+            for module in modules:
+                doc_path = output_dir / f"{module.name}.md"
+                lines = [
+                    f"# Module `{module.name}`",
+                    "",
+                    f"**Version:** {module.version}",
+                    "",
+                ]
+                if module.docstring:
+                    lines.extend([module.docstring.strip(), ""])
+
+                if module.functions:
+                    lines.append("## Functions")
+                    lines.append("")
+                    for func in module.functions:
+                        lines.append(f"### `{func.signature}`")
+                        if func.docstring:
+                            lines.append("")
+                            lines.append(func.docstring.strip())
+                        lines.append("")
+
+                if module.classes:
+                    lines.append("## Classes")
+                    lines.append("")
+                    for cls in module.classes:
+                        lines.append(f"### `{cls.name}`")
+                        if cls.docstring:
+                            lines.append("")
+                            lines.append(cls.docstring.strip())
+                            lines.append("")
+                        if cls.methods:
+                            lines.append("#### Methods")
+                            lines.append("")
+                            for method in cls.methods:
+                                lines.append(f"- `{method.signature}`")
+                                if method.docstring:
+                                    lines.append(f"  - {method.docstring.strip()}")
+                            lines.append("")
+
+                lines.append(f"_Source: `{module.path}`_")
+                doc_path.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+                written_files.append(doc_path)
+
+            return written_files
+
+        # ===== Workflow Documentation Helpers ===== #
+
+        def parse_workflow(path: Path) -> WorkflowDoc | None:
+            """Parse a workflow YAML file into documentation structure."""
+            try:
+                data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+                name = data.get("name", path.stem)
+                triggers = list(data.get("on", {}))
+                description = data.get("description", "")
+                jobs = data.get("jobs", {})
+                return WorkflowDoc(name=name, file=path, on=triggers, description=description, jobs=jobs)
+            except Exception as e:
+                print(f"::warning::Failed to parse workflow {path}: {e}")
+                return None
+
+        def discover_workflows(workflows_dir: Path) -> list:
+            """Discover workflow files."""
+            docs = []
+            if not workflows_dir.exists():
+                print(f"::warning::Workflows directory does not exist: {workflows_dir}")
+                return docs
+            for path in workflows_dir.glob("*.yml"):
+                workflow = parse_workflow(path)
+                if workflow:
+                    docs.append(workflow)
+            for path in workflows_dir.glob("*.yaml"):
+                workflow = parse_workflow(path)
+                if workflow:
+                    docs.append(workflow)
+            docs.sort(key=lambda doc: doc.name)
+            return docs
+
+        def generate_workflow_docs(workflows_dir: str, output: Path) -> Path | None:
+            """Generate Markdown documentation for workflows."""
+            output.parent.mkdir(parents=True, exist_ok=True)
+            workflows = discover_workflows(Path(workflows_dir))
+            if not workflows:
+                print(f"::warning::No workflows found in {workflows_dir}")
+                return None
+
+            lines = ["# Workflow Catalog", ""]
+
+            for workflow in workflows:
+                lines.append(f"## {workflow.name}")
+                if workflow.description:
+                    lines.append("")
+                    lines.append(workflow.description)
+                lines.append("")
+                lines.append("**File:** `" + str(workflow.file.relative_to(Path.cwd())) + "`  ")
+                lines.append("**Triggers:** " + (", ".join(workflow.on) if workflow.on else "manual"))
+                lines.append("")
+                lines.append("### Jobs")
+                lines.append("")
+                for job_name, job in workflow.jobs.items():
+                    lines.append(f"- **{job_name}**: runs-on `{job.get('runs-on', 'N/A')}`")
+                lines.append("")
+
+            output.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+            return output
+
+        # ===== Version Management ===== #
+
+        def _derive_version(version: str | None) -> str:
+            """Derive documentation version from args, env, or defaults."""
+            if version:
+                return version
+            env_version = os.environ.get("DOC_VERSION")
+            if env_version:
+                return env_version
+            branch = os.environ.get("GITHUB_REF_NAME")
+            if branch and branch.startswith("stable-"):
+                return branch
+            return "latest"
+
+        # ===== Main Build Function ===== #
+
+        def build_documentation(
+            source_dirs: list,
+            workflows_dir: str,
+            output_root: Path,
+            generate_api: bool = True,
+            generate_workflows: bool = True,
+            generate_search: bool = True,
+            version: str | None = None,
+        ) -> dict:
+            """Build documentation site structure."""
+            version_name = _derive_version(version)
+            version_dir = output_root / version_name
+            api_dir = version_dir / "api"
+            workflows_output = version_dir / "workflows.md"
+
+            output_root.mkdir(parents=True, exist_ok=True)
+            version_dir.mkdir(parents=True, exist_ok=True)
+
+            print(f"::notice::Building documentation for version '{version_name}'")
+
+            api_files = []
+            if generate_api:
+                api_files = generate_api_docs(source_dirs, api_dir)
+                print(f"::notice::Generated {len(api_files)} API documentation files")
+
+            workflows_path = None
+            if generate_workflows:
+                workflows_path = generate_workflow_docs(workflows_dir, workflows_output)
+                if workflows_path:
+                    print(f"::notice::Generated workflow documentation")
+
+            generated_files = [str(f.relative_to(output_root)) for f in api_files]
+            if workflows_path:
+                generated_files.append(str(workflows_path.relative_to(output_root)))
+
+            search_index_path = None
+            if generate_search and (api_files or workflows_path):
+                search_index = []
+                for doc_path in api_files:
+                    search_index.append({
+                        "title": doc_path.stem,
+                        "path": str(doc_path.relative_to(output_root))
+                    })
+                if workflows_path:
+                    search_index.append({
+                        "title": "Workflows",
+                        "path": str(workflows_path.relative_to(output_root))
+                    })
+
+                search_index_file = output_root / "search-index.json"
+                search_index_file.write_text(json.dumps(search_index, indent=2), encoding="utf-8")
+                search_index_path = str(search_index_file.relative_to(output_root))
+                generated_files.append(search_index_path)
+                print(f"::notice::Generated search index with {len(search_index)} entries")
+
+            versions_path = output_root / "versions.json"
+            versions = []
+            if versions_path.exists():
+                try:
+                    versions = json.loads(versions_path.read_text(encoding="utf-8"))
+                except json.JSONDecodeError:
+                    print("::warning::versions.json malformed; regenerating")
+            if version_name not in versions:
+                versions.append(version_name)
+            versions_path.write_text(json.dumps(sorted(versions), indent=2), encoding="utf-8")
+
+            return {
+                "version": version_name,
+                "api_count": len(api_files),
+                "workflows": workflows_path is not None,
+                "generated_files": generated_files,
+                "search_index": search_index_path,
+            }
+
+        # ===== Main Execution ===== #
+
+        source_dirs = [s.strip() for s in os.environ.get("SOURCE_DIRS", ".github/workflows/scripts").split(",")]
+        workflows_dir = os.environ.get("WORKFLOWS_DIR", ".github/workflows")
+        output_dir = Path(os.environ.get("OUTPUT_DIR", "docs/generated"))
+        doc_version = os.environ.get("DOC_VERSION", "")
+        generate_api = os.environ.get("GENERATE_API", "true").lower() == "true"
+        generate_workflows = os.environ.get("GENERATE_WORKFLOWS", "true").lower() == "true"
+        generate_search = os.environ.get("GENERATE_SEARCH_INDEX", "true").lower() == "true"
+
+        try:
+            result = build_documentation(
+                source_dirs=source_dirs,
+                workflows_dir=workflows_dir,
+                output_root=output_dir,
+                generate_api=generate_api,
+                generate_workflows=generate_workflows,
+                generate_search=generate_search,
+                version=doc_version or None,
+            )
+
+            # Set outputs for GitHub Actions
+            output_dir_abs = output_dir.resolve()
+            print(f"::set-output name=build-status::success")
+            print(f"::set-output name=generated-files::{json.dumps(result['generated_files'])}")
+            print(f"::set-output name=api-docs-count::{result['api_count']}")
+            print(f"::set-output name=doc-version::{result['version']}")
+            print(f"::set-output name=output-dir::{output_dir_abs}")
+            if result['search_index']:
+                print(f"::set-output name=search-index-path::{result['search_index']}")
+
+            print(f"::notice::Documentation build completed successfully")
+        except Exception as e:
+            print(f"::error::Documentation build failed: {e}")
+            print(f"::set-output name=build-status::failed")
+            sys.exit(1)
