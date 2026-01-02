@@ -4,16 +4,23 @@
 <!-- version: 1.0.0 -->
 <!-- guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d -->
 
-A GitHub Actions composite action that generates API documentation from Python source code and workflow reference documentation from GitHub Actions workflow YAML files. This action replaces the `docs_workflow.py` script from ghcommon.
+A GitHub Actions composite action that generates API documentation from Python
+source code and workflow reference documentation from GitHub Actions workflow
+YAML files. This action replaces the `docs_workflow.py` script from ghcommon.
 
 ## Features
 
-- **API Documentation Generation**: Extracts docstrings from Python modules and generates Markdown documentation
-- **Workflow Reference Documentation**: Parses GitHub Actions workflows and creates a searchable catalog
-- **Flexible Version Management**: Supports multiple documentation versions (e.g., "latest", "stable-v1.0")
-- **Search Index Generation**: Creates a JSON search index for documentation site integration
+- **API Documentation Generation**: Extracts docstrings from Python modules and
+  generates Markdown documentation
+- **Workflow Reference Documentation**: Parses GitHub Actions workflows and
+  creates a searchable catalog
+- **Flexible Version Management**: Supports multiple documentation versions
+  (e.g., "latest", "stable-v1.0")
+- **Search Index Generation**: Creates a JSON search index for documentation
+  site integration
 - **Modular Operation**: Generate API docs, workflows, or both independently
-- **Embedded Python Logic**: No external dependencies; all logic embedded in the composite action
+- **Embedded Python Logic**: No external dependencies; all logic embedded in the
+  composite action
 
 ## Usage
 
@@ -109,7 +116,8 @@ jobs:
 
 ### `source-dirs`
 
-- **Description**: Comma-separated list of source directories containing Python modules to document
+- **Description**: Comma-separated list of source directories containing Python
+  modules to document
 - **Required**: false
 - **Default**: `.github/workflows/scripts`
 
@@ -126,7 +134,8 @@ jobs:
 
 ### `doc-version`
 
-- **Description**: Documentation version string (e.g., "1.0.0", "latest", "stable-v2")
+- **Description**: Documentation version string (e.g., "1.0.0", "latest",
+  "stable-v2")
 - **Required**: false
 - **Default**: Derives from environment or defaults to "latest"
 
@@ -197,12 +206,14 @@ docs/generated/
 ### API Documentation
 
 For each Python module, generates a Markdown file with:
+
 - Module overview and docstring
 - Function signatures and documentation
 - Class definitions, docstrings, and methods
 - Source file reference
 
 **Example:**
+
 ```markdown
 # Module `ci_workflow`
 
@@ -223,18 +234,21 @@ Build a test matrix configuration...
 Configuration for test matrix generation.
 
 #### Methods
+
 - `from_yaml(path: Path)` - Load configuration from YAML file
 ```
 
 ### Workflow Documentation
 
 Generates a comprehensive catalog of all workflows with:
+
 - Workflow name and description
 - Trigger events
 - Jobs and their configuration
 - File references
 
 **Example:**
+
 ```markdown
 # Workflow Catalog
 
@@ -242,10 +256,10 @@ Generates a comprehensive catalog of all workflows with:
 
 Runs test suite on pull requests.
 
-**File:** `.github/workflows/ci-tests.yml`
-**Triggers:** pull_request, push
+**File:** `.github/workflows/ci-tests.yml` **Triggers:** pull_request, push
 
 ### Jobs
+
 - **test-unit**: runs-on `ubuntu-latest`
 - **test-integration**: runs-on `ubuntu-latest`
 ```
@@ -275,7 +289,8 @@ The action automatically manages multiple documentation versions:
 - **Release**: Use semantic version (e.g., "v1.0.0")
 - **Branch-based**: Use branch name if prefixed with "stable-"
 
-The `versions.json` file tracks all available versions for dynamic documentation site navigation.
+The `versions.json` file tracks all available versions for dynamic documentation
+site navigation.
 
 ## Error Handling
 
@@ -306,7 +321,7 @@ jobs:
           source-dirs: 'scripts,src'
           workflows-dir: '.github/workflows'
           output-dir: site/docs
-          doc-version: ''  # Auto-derive
+          doc-version: '' # Auto-derive
 
       - name: Deploy to GitHub Pages
         uses: actions/upload-artifact@v3
@@ -326,7 +341,8 @@ jobs:
 ## Implementation Notes
 
 - **Python Embedding**: This is a composite action with embedded Python 3 logic
-- **No External Dependencies**: Uses only Python standard library and optional PyYAML (auto-installed)
+- **No External Dependencies**: Uses only Python standard library and optional
+  PyYAML (auto-installed)
 - **YAML Support**: Automatically installs PyYAML if needed for workflow parsing
 - **Cross-Platform**: Works on any GitHub Actions runner (Linux, macOS, Windows)
 
@@ -334,7 +350,8 @@ jobs:
 
 - **Source**: Replaces `ghcommon/.github/workflows/scripts/docs_workflow.py`
 - **Original Workflow**: `documentation.yml` in ghcommon repository
-- **Documentation Format**: Markdown compatible with static site generators (Jekyll, Hugo, Docusaurus, etc.)
+- **Documentation Format**: Markdown compatible with static site generators
+  (Jekyll, Hugo, Docusaurus, etc.)
 
 ## License
 

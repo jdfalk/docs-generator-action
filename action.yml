@@ -8,14 +8,14 @@ inputs:
       Comma-separated list of source directories containing Python modules to document.
       Each directory will be scanned recursively for .py files.
     required: false
-    default: ".github/workflows/scripts"
+    default: '.github/workflows/scripts'
 
   workflows-dir:
     description: >
       Directory containing GitHub Actions workflow YAML files (.yml, .yaml).
       Used to generate workflow reference documentation.
     required: false
-    default: ".github/workflows"
+    default: '.github/workflows'
 
   output-dir:
     description: >
@@ -28,25 +28,25 @@ inputs:
       Documentation version string (e.g., "1.0.0", "latest", "stable-v2").
       If not provided, derives from environment or defaults to "latest".
     required: false
-    default: ""
+    default: ''
 
   generate-api:
     description: >
       Whether to generate API documentation from Python docstrings.
     required: false
-    default: "true"
+    default: 'true'
 
   generate-workflows:
     description: >
       Whether to generate workflow reference documentation.
     required: false
-    default: "true"
+    default: 'true'
 
   generate-search-index:
     description: >
       Whether to generate a search index JSON file for documentation site integration.
     required: false
-    default: "true"
+    default: 'true'
 
 outputs:
   build-status:
