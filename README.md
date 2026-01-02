@@ -185,7 +185,7 @@ Path to the generated search index JSON file (if enabled)
 
 ## Generated Documentation Structure
 
-```
+```text
 docs/generated/
 ├── latest/
 │   ├── api/
