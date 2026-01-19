@@ -3,6 +3,7 @@
 <!-- file: README.md -->
 <!-- version: 1.0.0 -->
 <!-- guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d -->
+<!-- last-edited: 2026-01-19 -->
 
 A GitHub Actions composite action that generates API documentation from Python
 source code and workflow reference documentation from GitHub Actions workflow
